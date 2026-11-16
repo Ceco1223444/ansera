@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+        env:
+          # Placeholders so the whole app is compiled; nothing is called at build time.
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_ANON_KEY: ci-placeholder
+
+  ai-service:
+    name: ai-service (unit tests, import check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python test_clustering.py
+      - name: App imports and registers its routes
+        env:
+          SUPABASE_URL: http://127.0.0.1:54321
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+          OPENROUTER_API_KEY: ci-placeholder
+          OPENAI_API_KEY: ci-placeholder
+          AI_SERVICE_SECRET: ci-placeholder
+        run: python -c "import main; print(sorted(r.path for r in main.app.routes))"
+
+  database:
+    name: Database (migrations + seed from scratch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 3.1.0
+      - name: Apply every migration and the demo seed to an empty database
+        run: supabase db start
+      - name: Seed is queryable
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -c \
+            "do \$\$ begin if (select count(*) from public.email_logs) = 0 then raise exception 'demo seed missing'; end if; end \$\$;"
